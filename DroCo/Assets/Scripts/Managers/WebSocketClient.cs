@@ -133,19 +133,46 @@ public class WebSocketClient : Singleton<WebSocketClient> {
     private void OnClose(WebSocketCloseCode closeCode) {
         Debug.Log("Connection closed!");
         handshake_done = false;
-        GameManager.Instance.HandleConnectionFailed();
+        if (GameManager.Instance != null) {
+            GameManager.Instance.HandleConnectionFailed();
+        }
     }
 
     private void OnError(string errorMsg) {
         Debug.LogError(errorMsg);
         handshake_done = false;
-        GameManager.Instance.HandleConnectionFailed();
+        if (GameManager.Instance != null) {
+            GameManager.Instance.HandleConnectionFailed();
+        }
     }
 
     private void OnConnected() {
         Debug.Log("Connected - sending handshake");
         SendToServer("{\"type\":\"hello\",\"data\":{\"ctype\":1}}");
     }
+
+    private void OnDestroy() {
+        // Volá se i při vypínání editoru/scény; nečekáme async uzavření, jen bezpečně zavřeme bez await
+        try {
+            if (websocket != null) {
+                // Odeber handlery
+                websocket.OnOpen -= OnConnected;
+                websocket.OnError -= OnError;
+                websocket.OnClose -= OnClose;
+                websocket.OnMessage -= HandleReceivedData;
+
+                // Pokud je dostupná metoda CancelConnection, použij ji (synchronní alternativa)
+                try {
+                    websocket.CancelConnection();
+                } catch (Exception) { }
+
+                websocket = null;
+            }
+        } catch (Exception ex) {
+            Debug.LogWarning("OnDestroy - exception: " + ex);
+        }
+    }
+
 
     /// <summary>
     /// Create websocket URI from domain name and port
@@ -158,7 +185,30 @@ public class WebSocketClient : Singleton<WebSocketClient> {
     }
 
     private async void OnApplicationQuit() {
-        await websocket?.Close();
+        // Bezpečné uzavření websocketu při ukončení aplikace/editoru
+        try {
+            if (websocket != null) {
+                // Odeber event handlery, aby po zavření nic nesnažilo volat zpět do destroyed objektů
+                websocket.OnOpen -= OnConnected;
+                websocket.OnError -= OnError;
+                websocket.OnClose -= OnClose;
+                websocket.OnMessage -= HandleReceivedData;
+
+                // Zavři jen pokud je to otevřené/connecting - await čeká jen v runtime
+                if (websocket.State == WebSocketState.Open || websocket.State == WebSocketState.Connecting) {
+                    try {
+                        await websocket.Close();
+                    } catch (Exception ex) {
+                        Debug.LogWarning("WebSocket close failed: " + ex.Message);
+                    }
+                }
+
+                websocket = null;
+            }
+        } catch (Exception ex) {
+            Debug.LogWarning("OnApplicationQuit - exception while closing websocket: " + ex);
+        }
     }
+
 
 }
